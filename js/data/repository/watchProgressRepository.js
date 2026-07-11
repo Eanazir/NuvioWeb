@@ -462,6 +462,9 @@ async function fetchTraktProgressSnapshot() {
 // Cache for enriched metadata (5-minute TTL)
 const enrichedMetaCache = new Map();
 const ENRICHED_META_CACHE_TTL_MS = 5 * 60 * 1000;
+// Bound the cache so a long browsing session across many titles can't grow the
+// heap without limit (expired entries were checked on read but never evicted).
+const ENRICHED_META_CACHE_MAX = 300;
 
 async function batchEnrichProgressItems(items) {
   if (!items.length) return [];
@@ -484,6 +487,13 @@ async function batchEnrichProgressItems(items) {
         // Only cache real metadata. Caching a null (timeout/miss) would leave the
         // item unenriched for the full TTL after a single slow response.
         if (meta) {
+          // Evict the oldest entry when at capacity (Map preserves insertion order).
+          if (enrichedMetaCache.size >= ENRICHED_META_CACHE_MAX && !enrichedMetaCache.has(cacheKey)) {
+            const oldestKey = enrichedMetaCache.keys().next().value;
+            if (oldestKey !== undefined) {
+              enrichedMetaCache.delete(oldestKey);
+            }
+          }
           enrichedMetaCache.set(cacheKey, { meta, timestamp: now });
         }
       }

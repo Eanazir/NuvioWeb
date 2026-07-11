@@ -239,7 +239,7 @@ function renderModernHeroMarkup({
         </div>
         <div class="home-hero-copy home-modern-hero-copy">
           <div class="home-hero-brand">
-            ${display.logo ? `<img class="home-hero-logo" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />` : ""}
+            ${display.logo ? `<div class="home-hero-logo"><img class="home-hero-logo-layer is-active" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" /><img class="home-hero-logo-layer" alt="" aria-hidden="true" decoding="async" fetchpriority="high" /></div>` : ""}
             <h1 class="home-hero-title-text${display.logo ? " is-hidden" : ""}">${escapeHtml(display.title)}</h1>
           </div>
           <div class="home-modern-hero-meta-line${display.leadingMeta.length || display.trailingMeta.length || display.showImdbPrimary ? "" : " is-empty"}">

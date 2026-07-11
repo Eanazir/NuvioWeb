@@ -7262,10 +7262,13 @@ export const MetaDetailsScreen = {
     if (!target) {
       return false;
     }
-    const previous = this.container.querySelector(".focusable.focused");
-    this.container
-      .querySelectorAll(".focusable")
-      .forEach((node) => node.classList.remove("focused"));
+    // Clear only nodes that actually carry `.focused` (normally one) instead of
+    // walking every `.focusable` in the large detail DOM on each keypress. Matches
+    // the cheaper pattern already used by search/library/discover and keeps the
+    // multi-node safety in case a prior render left more than one focused.
+    const focusedNodes = this.container.querySelectorAll(".focusable.focused");
+    const previous = focusedNodes[0] || null;
+    focusedNodes.forEach((node) => node.classList.remove("focused"));
     target.classList.add("focused");
     target.focus({ preventScroll: true });
     this.rememberEpisodeFocus(target, list);

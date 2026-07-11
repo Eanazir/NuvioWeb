@@ -4,6 +4,7 @@ import { TraktAuthService } from "./traktAuthService.js";
 import { ProfileManager } from "../../core/profile/profileManager.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 200;
 const CACHE = new Map();
 
 function buildCacheKey(contentId, traktId) {
@@ -22,6 +23,14 @@ function getCachedEntry(cacheKey) {
 }
 
 function setCachedEntry(cacheKey, value) {
+  // Bound the cache so browsing many titles over a long session can't grow the
+  // heap without limit; evict the oldest entry when at capacity.
+  if (CACHE.size >= CACHE_MAX_ENTRIES && !CACHE.has(cacheKey)) {
+    const oldestKey = CACHE.keys().next().value;
+    if (oldestKey !== undefined) {
+      CACHE.delete(oldestKey);
+    }
+  }
   CACHE.set(cacheKey, {
     value,
     expiresAt: Date.now() + CACHE_TTL_MS

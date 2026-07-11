@@ -96,17 +96,27 @@ export const ScreenUtils = {
     if (globalThis?.document?.body?.classList?.contains("nuvio-modal-open")) {
       return;
     }
-    const list = Array.from(container?.querySelectorAll(selector) || []).filter((node) => {
+    // Measure each focusable's rect exactly once and reuse it below. Previously
+    // getBoundingClientRect() was called per-node in the visibility filter AND again
+    // per-node when scoring candidates, forcing two synchronous layout flushes per
+    // node on every keypress (100-400 reflows on a large grid). One read per node
+    // halves that with identical geometry results.
+    const entries = [];
+    const rectByNode = new Map();
+    (container?.querySelectorAll(selector) || []).forEach((node) => {
       const rect = node.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
+      if (rect.width > 0 && rect.height > 0) {
+        entries.push({ node, rect });
+        rectByNode.set(node, rect);
+      }
     });
-    if (!list.length) {
+    if (!entries.length) {
       return;
     }
 
-    const current = container?.querySelector(`${selector}.focused`) || list[0];
+    const current = container?.querySelector(`${selector}.focused`) || entries[0].node;
     if (!current.classList.contains("focused")) {
-      list.forEach((node) => node.classList.remove("focused"));
+      entries.forEach(({ node }) => node.classList.remove("focused"));
       current.classList.add("focused");
       try {
         current.focus({ preventScroll: true });
@@ -116,15 +126,14 @@ export const ScreenUtils = {
       return;
     }
 
-    const currentRect = current.getBoundingClientRect();
+    const currentRect = rectByNode.get(current) || current.getBoundingClientRect();
     const cx = currentRect.left + currentRect.width / 2;
     const cy = currentRect.top + currentRect.height / 2;
     const strictDpadGrid = shouldUseStrictDpadGrid();
 
-    const candidates = list
-      .filter((node) => node !== current)
-      .map((node) => {
-        const rect = node.getBoundingClientRect();
+    const candidates = entries
+      .filter(({ node }) => node !== current)
+      .map(({ node, rect }) => {
         const nx = rect.left + rect.width / 2;
         const ny = rect.top + rect.height / 2;
         const dx = nx - cx;

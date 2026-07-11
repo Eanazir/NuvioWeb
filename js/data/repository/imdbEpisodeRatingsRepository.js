@@ -1,6 +1,7 @@
 import { IMDB_RATINGS_API_BASE_URL } from "../../config.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 200;
 const CACHE = new Map();
 
 function normalizeBaseUrl(value = "") {
@@ -79,6 +80,14 @@ export const imdbEpisodeRatingsRepository = {
     const url = `${normalizedBaseUrl}api/shows/${encodeURIComponent(String(normalizedTmdbId))}/season-ratings`;
     const payload = await fetchJson(url);
     const mapped = payload ? mapRatingsPayload(payload) : {};
+    // Bound the cache so browsing many shows over a long session can't grow the
+    // heap without limit; evict the oldest entry when at capacity.
+    if (CACHE.size >= CACHE_MAX_ENTRIES && !CACHE.has(cacheKey)) {
+      const oldestKey = CACHE.keys().next().value;
+      if (oldestKey !== undefined) {
+        CACHE.delete(oldestKey);
+      }
+    }
     CACHE.set(cacheKey, {
       value: mapped,
       expiresAt: now + CACHE_TTL_MS

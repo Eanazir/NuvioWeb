@@ -4,6 +4,7 @@ import { LocalStore } from "../../../core/storage/localStore.js";
 import { ScreenUtils } from "../../navigation/screen.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { I18n } from "../../../i18n/index.js";
+import { QrCodeGenerator } from "../../../core/qr/qrCodeGenerator.js";
 
 let pollInterval = null;
 let countdownInterval = null;
@@ -95,7 +96,12 @@ export const AuthQrSignInScreen = {
         return;
       }
 
-      this.renderQr(result);
+      // Only show the reassuring "scan and sign in" status if the QR actually
+      // rendered; renderQr sets its own error status on failure.
+      const rendered = this.renderQr(result);
+      if (!rendered) {
+        return;
+      }
       this.setStatus(I18n.t("auth.qr.scanAndSignIn"));
       this.startPolling(
         result.code,
@@ -111,19 +117,49 @@ export const AuthQrSignInScreen = {
     }
   },
 
-  renderQr({ qrImageUrl, code }) {
+  renderQr({ qrImageUrl, loginUrl, code }) {
     const qrContainer = this.container?.querySelector("#qr-container");
     const codeText = this.container?.querySelector("#qr-code-text");
 
     if (!qrContainer || !codeText) {
-      return;
+      return false;
     }
 
-    qrContainer.innerHTML = `
-      <img src="${qrImageUrl}" class="qr-image" alt="${I18n.t("auth.qr.qrImageAlt")}" />
-    `;
+    // Prefer generating the QR locally from the login URL (no network image) so a
+    // slow/blocked/rate-limited image request can't leave a silently-blank frame.
+    // This mirrors the settings/plugin/supporters screens which already draw QR
+    // codes to a canvas via QrCodeGenerator.
+    if (loginUrl) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.className = "qr-image";
+        QrCodeGenerator.generate(canvas, loginUrl, 360);
+        qrContainer.innerHTML = "";
+        qrContainer.appendChild(canvas);
+        codeText.innerText = I18n.t("auth.qr.codeLabel", { code });
+        return true;
+      } catch (error) {
+        console.warn("Local QR generation failed, falling back to remote image", error);
+      }
+    }
 
+    // Fallback: remote image, but with load/error handlers so a failed fetch
+    // surfaces an error and re-enables retry instead of showing a blank frame.
+    if (!qrImageUrl) {
+      this.setStatus(this.toFriendlyQrError("QR unavailable"));
+      return false;
+    }
+    const img = document.createElement("img");
+    img.className = "qr-image";
+    img.alt = I18n.t("auth.qr.qrImageAlt");
+    img.onerror = () => {
+      this.setStatus(this.toFriendlyQrError("QR image failed to load"));
+    };
+    img.src = qrImageUrl;
+    qrContainer.innerHTML = "";
+    qrContainer.appendChild(img);
     codeText.innerText = I18n.t("auth.qr.codeLabel", { code });
+    return true;
   },
 
   clearQr() {

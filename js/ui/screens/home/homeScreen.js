@@ -122,6 +122,99 @@ function logHomePerf(stage, data = {}) {
     console.info(`[home-perf] ${stage}`, data);
   } catch (_) {
   }
+  // TEMP PERF MEASUREMENT (revert before shipping): mirror focus timing to an
+  // on-screen overlay so it can be read directly on a TV without an inspector.
+  try {
+    if (stage === "focusNode" && typeof data.ms === "number") {
+      updateHomePerfOverlay(data.ms);
+    }
+  } catch (_) {
+  }
+}
+
+// TEMP PERF MEASUREMENT (revert before shipping): raw key-repeat cadence tracking
+// so we can see the TV's real repeat interval and how many repeats the throttle
+// drops. `lastAt` is the previous raw repeat time; gaps are event-to-event.
+const __homeRepeatState = { lastAt: 0, gaps: [], repeats: 0, dropped: 0 };
+function recordHomeRepeatEvent(nowMs, willDrop) {
+  const s = __homeRepeatState;
+  s.repeats += 1;
+  if (willDrop) {
+    s.dropped += 1;
+  }
+  if (s.lastAt > 0) {
+    s.gaps.push(nowMs - s.lastAt);
+    if (s.gaps.length > 20) {
+      s.gaps.shift();
+    }
+  }
+  s.lastAt = nowMs;
+  renderHomePerfOverlay();
+}
+
+// TEMP PERF MEASUREMENT (revert before shipping): track cost of the deferred
+// "settled" focus effects (hero + poster) and the hero preview render itself.
+const __homeEffectState = { settledMax: 0, heroMax: 0, heroLast: 0 };
+function recordHomeSettledEffect(ms) {
+  __homeEffectState.settledMax = Math.max(__homeEffectState.settledMax, ms);
+  renderHomePerfOverlay();
+}
+function recordHomeHeroRender(ms) {
+  __homeEffectState.heroLast = ms;
+  __homeEffectState.heroMax = Math.max(__homeEffectState.heroMax, ms);
+  renderHomePerfOverlay();
+}
+
+// TEMP PERF MEASUREMENT (revert before shipping): tiny on-screen readout of
+// recent focusNode() durations (last / rolling-avg / max, plus a count).
+const __homePerfState = { samples: [], max: 0, count: 0 };
+function updateHomePerfOverlay(ms) {
+  const s = __homePerfState;
+  s.count += 1;
+  s.max = Math.max(s.max, ms);
+  s.samples.push(ms);
+  if (s.samples.length > 20) {
+    s.samples.shift();
+  }
+  renderHomePerfOverlay();
+}
+
+function renderHomePerfOverlay() {
+  if (typeof document === "undefined" || !document.body) {
+    return;
+  }
+  const f = __homePerfState;
+  const fAvg = f.samples.length
+    ? f.samples.reduce((a, b) => a + b, 0) / f.samples.length
+    : 0;
+  const r = __homeRepeatState;
+  const rAvgGap = r.gaps.length
+    ? r.gaps.reduce((a, b) => a + b, 0) / r.gaps.length
+    : 0;
+  const rMinGap = r.gaps.length ? Math.min(...r.gaps) : 0;
+  const dropPct = r.repeats ? (r.dropped / r.repeats) * 100 : 0;
+  let el = document.getElementById("nuvio-home-perf-overlay");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "nuvio-home-perf-overlay";
+    el.style.cssText =
+      "position:fixed;top:8px;right:8px;z-index:99999;background:rgba(0,0,0,0.8);" +
+      "color:#0f0;font:700 24px/1.3 monospace;padding:10px 14px;border-radius:8px;" +
+      "pointer-events:none;white-space:pre;text-align:right;";
+    document.body.appendChild(el);
+  }
+  const e = __homeEffectState;
+  el.textContent =
+    "focusNode: " + fFmt(f.samples[f.samples.length - 1]) + " / avg " + fFmt(fAvg) + " / max " + fFmt(f.max) + "\n" +
+    "repeat gap: avg " + fFmt(rAvgGap) + " min " + fFmt(rMinGap) + "\n" +
+    "repeats: " + r.repeats + "  dropped: " + r.dropped + " (" + dropPct.toFixed(0) + "%)\n" +
+    "hero render: last " + fFmt(e.heroLast) + " max " + fFmt(e.heroMax) + "\n" +
+    "settled fx max: " + fFmt(e.settledMax) + "\n" +
+    "moves(n): " + f.count;
+}
+
+function fFmt(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(1) : "-";
 }
 
 function t(key, params = {}, fallback = key) {
@@ -465,80 +558,50 @@ function animateModernHeroBackdropSwap(backdrop, nextSrc, nextAlt = "") {
   });
 }
 
-function animateModernHeroLogoSwap(logoNode, nextSrc, nextAlt = "") {
-  if (!(logoNode instanceof HTMLImageElement)) {
+// Cross-dissolve the hero logo between two fixed stacked <img> layers, mirroring
+// NuvioTV's in-place logo crossfade. `logoContainer` is the `.home-hero-logo` div
+// holding two `.home-hero-logo-layer` images; we load the next src into the inactive
+// layer and swap the `is-active` class once it's ready. No cloned nodes, no reflow,
+// no slide — so the previous and next logo never appear at different positions.
+function animateModernHeroLogoSwap(logoContainer, nextSrc, nextAlt = "") {
+  if (!(logoContainer instanceof HTMLElement)) {
     return;
   }
+  const layers = logoContainer.querySelectorAll(".home-hero-logo-layer");
+  if (layers.length < 2) {
+    return;
+  }
+  const active = logoContainer.querySelector(".home-hero-logo-layer.is-active") || layers[0];
+  const inactive = active === layers[0] ? layers[1] : layers[0];
 
   const normalizedSrc = String(nextSrc || "").trim();
   const normalizedAlt = String(nextAlt || "logo").trim() || "logo";
-  const currentSrc = String(logoNode.getAttribute("src") || "").trim();
-  const token = Number(logoNode.heroLogoTransitionToken || 0) + 1;
-  logoNode.heroLogoTransitionToken = token;
+  const activeSrc = String(active.getAttribute("src") || "").trim();
+  const token = Number(logoContainer.heroLogoTransitionToken || 0) + 1;
+  logoContainer.heroLogoTransitionToken = token;
 
-  const clearGhosts = () => {
-    logoNode.parentElement?.querySelectorAll?.(".home-hero-logo-transition-ghost")?.forEach((node) => node.remove());
-  };
-
-  const finalize = () => {
-    if (Number(logoNode.heroLogoTransitionToken || 0) !== token) {
-      return;
+  if (!normalizedSrc || normalizedSrc === activeSrc) {
+    if (normalizedSrc) {
+      active.setAttribute("alt", normalizedAlt);
     }
-    logoNode.classList.remove("home-hero-logo-transition-enter", "is-visible");
-    clearGhosts();
-  };
-
-  if (!normalizedSrc) {
-    finalize();
-    logoNode.remove();
-    return;
-  }
-
-  if (currentSrc === normalizedSrc) {
-    logoNode.setAttribute("alt", normalizedAlt);
     return;
   }
 
   preloadImageSource(normalizedSrc).then((loaded) => {
-    if (Number(logoNode.heroLogoTransitionToken || 0) !== token) {
+    if (Number(logoContainer.heroLogoTransitionToken || 0) !== token) {
       return;
     }
-
+    inactive.setAttribute("src", normalizedSrc);
+    inactive.setAttribute("alt", normalizedAlt);
     if (!loaded) {
-      finalize();
-      logoNode.setAttribute("src", normalizedSrc);
-      logoNode.setAttribute("alt", normalizedAlt);
+      // Preload failed — swap without the crossfade rather than risk a blank layer.
+      inactive.classList.add("is-active");
+      active.classList.remove("is-active");
       return;
     }
-
-    clearGhosts();
-    const parent = logoNode.parentElement;
-    let ghost = null;
-    if (parent && currentSrc) {
-      ghost = logoNode.cloneNode(false);
-      ghost.classList.add("home-hero-logo-transition-ghost");
-      parent.insertBefore(ghost, logoNode);
-    }
-
-    logoNode.classList.add("home-hero-logo-transition-enter");
-    logoNode.setAttribute("src", normalizedSrc);
-    logoNode.setAttribute("alt", normalizedAlt);
-
-    requestAnimationFrame(() => {
-      if (Number(logoNode.heroLogoTransitionToken || 0) !== token) {
-        return;
-      }
-      requestAnimationFrame(() => {
-        if (Number(logoNode.heroLogoTransitionToken || 0) !== token) {
-          return;
-        }
-        logoNode.classList.add("is-visible");
-        ghost?.classList?.add("is-fading-out");
-        setTimeout(() => {
-          finalize();
-        }, HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS);
-      });
-    });
+    // Crossfade: reveal the new layer as the old one fades out (both boxed identically).
+    inactive.classList.add("is-active");
+    active.classList.remove("is-active");
   });
 }
 
@@ -1678,7 +1741,7 @@ function renderHeroMarkup(layoutMode, heroItem, heroCandidates) {
         </div>
         <div class="home-hero-copy">
           <div class="home-hero-brand">
-            ${display.logo ? `<img class="home-hero-logo" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" />` : ""}
+            ${display.logo ? `<div class="home-hero-logo"><img class="home-hero-logo-layer is-active" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title)}" decoding="async" fetchpriority="high" /><img class="home-hero-logo-layer" alt="" aria-hidden="true" decoding="async" fetchpriority="high" /></div>` : ""}
             <h1 class="home-hero-title-text${display.logo ? " is-hidden" : ""}">${escapeHtml(display.title)}</h1>
           </div>
           <div class="home-hero-meta-primary${display.metaPrimary.length ? "" : " is-empty"}">${renderMetaTokens(display.metaPrimary)}</div>
@@ -3033,17 +3096,26 @@ export const HomeScreen = {
   },
 
   shouldUseImmediateHorizontalScrollForNode(node) {
+    // On constrained TVs, use instant horizontal scroll for ALL home cards (not just
+    // continue-watching). The animated path cancels + restarts a per-frame rAF scroll
+    // on every move; rapid left<->right reversal thrashes that (cancel/restart/reflow)
+    // and stalls the event loop — the reversal stutter. Instant scroll avoids it,
+    // matching the continue-watching and episode-list behavior that already tests well.
     return Boolean(
-      node?.matches?.(".home-continue-card.focusable")
+      node?.matches?.(".home-content-card.focusable")
       && (Platform.isWebOS() || this.isPerformanceConstrained() || this.isLegacyTvRuntime())
     );
   },
 
   shouldDeferContinueWatchingFocusEffects(node, direction = null, inputMeta = null) {
     void inputMeta;
+    // Pinned to continue-watching cards specifically: the instant-scroll predicate
+    // was broadened to all home cards for scroll smoothness, but this defer-effects
+    // behavior should stay scoped to continue-watching as before.
     return Boolean(
       (direction === "left" || direction === "right")
-      && this.shouldUseImmediateHorizontalScrollForNode(node)
+      && node?.matches?.(".home-continue-card.focusable")
+      && (Platform.isWebOS() || this.isPerformanceConstrained() || this.isLegacyTvRuntime())
     );
   },
 
@@ -3069,6 +3141,38 @@ export const HomeScreen = {
     }, this.isLegacyTvRuntime() ? 260 : 220);
   },
 
+  // Run the heavy focus effects (hero preview + poster flow) only after held-key
+  // navigation settles, so they don't block the main thread between rapid moves.
+  // Reschedules on every move while holding; fires ~180ms after the last one.
+  scheduleSettledFocusEffects(node) {
+    if (this.settledFocusEffectsTimer) {
+      clearTimeout(this.settledFocusEffectsTimer);
+      this.settledFocusEffectsTimer = null;
+    }
+    const target = node instanceof HTMLElement ? node : null;
+    if (!target) {
+      return;
+    }
+    this.settledFocusEffectsTimer = setTimeout(() => {
+      this.settledFocusEffectsTimer = null;
+      if (
+        Router.getCurrent() !== "home"
+        || !target.isConnected
+        || this.getCurrentFocusedNode() !== target
+      ) {
+        return;
+      }
+      // TEMP PERF MEASUREMENT (revert before shipping): time the settled effects so
+      // the overlay confirms this was the per-move blocker we deferred.
+      const start = HOME_PERF_DEBUG ? homePerfNow() : 0;
+      this.scheduleModernHeroUpdate(target);
+      this.scheduleFocusedPosterFlow(target);
+      if (HOME_PERF_DEBUG) {
+        recordHomeSettledEffect(homePerfNow() - start);
+      }
+    }, 180);
+  },
+
   getBackgroundRenderDelay() {
     if (this.isLegacyTvRuntime()) {
       const collectionCount = Array.isArray(this.collections) ? this.collections.length : 0;
@@ -3088,6 +3192,14 @@ export const HomeScreen = {
   },
 
   getDirectionalRepeatThrottleMs() {
+    // Tizen is treated as a legacy runtime elsewhere so episode-list scroll stays
+    // instant, but the 120ms legacy key-repeat cap makes rapid card navigation feel
+    // sluggish on capable Samsung TVs. Let Tizen use the base 80ms cap (the same
+    // value non-TV browsers use), closest to NuvioTV's native unthrottled focus;
+    // keep the heavier caps only for genuinely-old webOS<=5 legacy / constrained.
+    if (Platform.isTizen()) {
+      return MODERN_HOME_CONSTANTS.keyRepeatThrottleMs;
+    }
     if (this.isLegacyTvRuntime()) {
       return Math.max(MODERN_HOME_CONSTANTS.keyRepeatThrottleMs, 120);
     }
@@ -3213,12 +3325,22 @@ export const HomeScreen = {
   },
 
   applyHeroToDom() {
+    // TEMP PERF MEASUREMENT (revert before shipping): time the hero preview render,
+    // which is the overlay that stutters while it appears.
+    const __heroStart = HOME_PERF_DEBUG ? homePerfNow() : 0;
+    const __finishHeroTiming = () => {
+      if (HOME_PERF_DEBUG) {
+        recordHomeHeroRender(homePerfNow() - __heroStart);
+      }
+    };
     const heroNode = this.container?.querySelector(".home-hero-card");
     if (!heroNode) {
+      __finishHeroTiming();
       return;
     }
     const hero = this.heroItem || this.heroCandidates?.[0] || null;
     if (!hero) {
+      __finishHeroTiming();
       return;
     }
 
@@ -3226,6 +3348,7 @@ export const HomeScreen = {
       ? buildModernHeroPresentation(hero)
       : buildHeroDisplayModel(hero, this.layoutMode);
     if (!display) {
+      __finishHeroTiming();
       return;
     }
     heroNode.dataset.itemId = hero?.id || "";
@@ -3260,12 +3383,14 @@ export const HomeScreen = {
       if (logoNode) {
         animateModernHeroLogoSwap(logoNode, display.logo, display.title || "logo");
       } else if (brandNode) {
-        brandNode.insertAdjacentHTML("afterbegin", `<img class="home-hero-logo home-hero-logo-transition-enter" src="${escapeAttribute(display.logo)}" alt="${escapeAttribute(display.title || "logo")}" decoding="async" fetchpriority="high" />`);
-        const insertedLogo = brandNode.querySelector(".home-hero-logo");
-        requestAnimationFrame(() => {
-          insertedLogo?.classList?.add("is-visible");
-          setTimeout(() => insertedLogo?.classList?.remove("home-hero-logo-transition-enter", "is-visible"), HOME_MODERN_HERO_BACKDROP_CROSSFADE_MS);
-        });
+        // No logo container yet (was showing the title) — insert the two-layer
+        // crossfade container with the first layer already active.
+        const alt = escapeAttribute(display.title || "logo");
+        const src = escapeAttribute(display.logo);
+        brandNode.insertAdjacentHTML(
+          "afterbegin",
+          `<div class="home-hero-logo"><img class="home-hero-logo-layer is-active" src="${src}" alt="${alt}" decoding="async" fetchpriority="high" /><img class="home-hero-logo-layer" alt="" aria-hidden="true" decoding="async" fetchpriority="high" /></div>`
+        );
       }
     } else if (logoNode) {
       logoNode.remove();
@@ -3327,6 +3452,44 @@ export const HomeScreen = {
     if (indicators) {
       indicators.innerHTML = buildHeroIndicators(this.heroCandidates, hero);
     }
+
+    // Gently fade the hero text in when the preview settles, so the image (crossfade),
+    // logo (crossfade) and text all ease in together like NuvioTV instead of the text
+    // snapping in. Opacity-only (GPU-composited, no reflow); skipped when the hero
+    // item is unchanged so it doesn't re-fade on incidental re-renders.
+    if (this.layoutMode === "modern") {
+      const heroItemKey = String(hero?.id || "");
+      if (heroItemKey && heroItemKey !== this._lastHeroContentKey) {
+        this._lastHeroContentKey = heroItemKey;
+        this.fadeInHeroContent(heroNode);
+      }
+    }
+    __finishHeroTiming();
+  },
+
+  // Fade the hero text block (title / meta / description) in via the Web Animations
+  // API — opacity only, so it composites on the GPU without layout work. The logo has
+  // its own crossfade; this brings the surrounding text in on the same beat.
+  fadeInHeroContent(heroNode) {
+    if (!heroNode || typeof heroNode.querySelectorAll !== "function") {
+      return;
+    }
+    const textNodes = heroNode.querySelectorAll(
+      ".home-hero-title-text, .home-modern-hero-meta-line, .home-modern-hero-secondary, .home-hero-description"
+    );
+    textNodes.forEach((node) => {
+      if (!node || typeof node.animate !== "function") {
+        return;
+      }
+      try {
+        node.animate(
+          [{ opacity: 0 }, { opacity: 1 }],
+          { duration: 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
+        );
+      } catch (_) {
+        // Web Animations API unavailable — leave the text as an instant swap.
+      }
+    });
   },
 
   setSidebarExpanded(expanded) {
@@ -5351,9 +5514,17 @@ export const HomeScreen = {
       }).catch(() => { });
     }
     if (typeof window !== "undefined") {
-      window.addEventListener("resize", () => {
+      // Store the handler so cleanup() can remove it, and skip work when Home is
+      // not the visible route: previously this anonymous listener was never removed
+      // and fired a full rAF truncation/layout pass even while another screen was
+      // active (resize fires on TV overscan/show-hide transitions).
+      this.boundHomeResizeHandler = () => {
+        if (Router.getCurrent && Router.getCurrent() !== "home") {
+          return;
+        }
         this.scheduleHomeTruncationUpdate();
-      });
+      };
+      window.addEventListener("resize", this.boundHomeResizeHandler);
     }
   },
 
@@ -6044,6 +6215,15 @@ export const HomeScreen = {
         if (delta <= 1) {
           return;
         }
+        // On constrained TVs, jump instantly instead of running a per-frame spring
+        // scroll on the main viewport — the spring reflows/repaints every visible row
+        // each frame, which stutters row-to-row navigation. Matches the instant
+        // horizontal-scroll treatment; keeps the smooth spring for capable browsers.
+        if (Platform.isWebOS() || Platform.isTizen() || this.isPerformanceConstrained()) {
+          this.cancelScrollAnimation(next.container, "y");
+          next.container.scrollTop = next.value;
+          return;
+        }
         this.animateSpringScroll(next.container, "y", next.value);
       });
       return;
@@ -6229,10 +6409,20 @@ export const HomeScreen = {
           this.ensureMainVerticalVisibility(target, direction, current, scrollAdjustments.vertical);
         }
       }
+      // During a held-key repeat, the hero-update + poster-flow scheduling is the
+      // main-thread work that bunches up keydown events and produces the stutter
+      // (measured: focusNode itself is ~6ms, but these effects block between moves).
+      // Defer them to a settle timer while holding, so rapid navigation stays smooth
+      // and the preview/poster catch up once the key is released.
+      const holdingRepeat = Boolean(inputMeta?.repeat);
       if (shouldDeferFocusEffects) {
         this.cancelPendingHeroFocus();
         this.cancelFocusedPosterFlow();
         this.scheduleDeferredContinueWatchingFocusEffects(target);
+      } else if (holdingRepeat) {
+        this.cancelPendingHeroFocus();
+        this.cancelFocusedPosterFlow();
+        this.scheduleSettledFocusEffects(target);
       } else {
         this.scheduleModernHeroUpdate(target);
         this.scheduleFocusedPosterFlow(target);
@@ -6414,6 +6604,13 @@ export const HomeScreen = {
     if (event?.repeat) {
       const now = Date.now();
       const repeatThrottleMs = this.getDirectionalRepeatThrottleMs();
+      // TEMP PERF MEASUREMENT (revert before shipping): record the gap between raw
+      // repeat events and whether this one is dropped by the throttle, so the TV's
+      // real key-repeat cadence and drop pattern show on the overlay.
+      try {
+        recordHomeRepeatEvent(now, (now - Number(this.lastDirectionalKeyAt || 0)) < repeatThrottleMs
+          && Number(this.lastDirectionalKeyAt || 0) > 0);
+      } catch (_) {}
       if (Number(this.lastDirectionalKeyAt || 0) > 0 &&
         (now - Number(this.lastDirectionalKeyAt || 0)) < repeatThrottleMs
       ) {
@@ -8666,6 +8863,11 @@ export const HomeScreen = {
       this.boundHomeViewport.removeEventListener("scroll", this.boundHomeViewportScrollHandler);
     }
     this.boundHomeViewport = null;
+    if (this.boundHomeResizeHandler && typeof window !== "undefined") {
+      window.removeEventListener("resize", this.boundHomeResizeHandler);
+      this.boundHomeResizeHandler = null;
+      this.homeTruncationObserversBound = false;
+    }
     if (this.homeTruncationFrame) {
       cancelAnimationFrame(this.homeTruncationFrame);
       this.homeTruncationFrame = null;

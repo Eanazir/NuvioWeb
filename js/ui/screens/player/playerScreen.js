@@ -7082,7 +7082,16 @@ export const PlayerScreen = {
       this.markPlaybackProgress();
       this.attemptPendingPlaybackRestore();
       this.renderHtmlSubtitleOverlayAtCurrentTime();
-      this.updateUiTick();
+      // `timeupdate` can fire far faster than 1Hz on native-video/hls.js paths
+      // (4-30+Hz), and `updateUiTick` runs a heavy chain (episode-array scans,
+      // getBoundingClientRect reads, torrent-stats fetch). The standing 1s
+      // tickTimer already guarantees clock/ends-at freshness, so throttle the
+      // event-driven invocation to ~250ms to keep it off the render-critical path.
+      const nowMs = Date.now();
+      if (nowMs - Number(this._lastTimeUpdateUiTickAt || 0) >= 250) {
+        this._lastTimeUpdateUiTickAt = nowMs;
+        this.updateUiTick();
+      }
     };
 
     const onLoadedMetadata = () => {

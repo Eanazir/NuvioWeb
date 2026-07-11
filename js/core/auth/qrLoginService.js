@@ -6,6 +6,22 @@ import { AuthState } from "./authState.js";
 
 let lastError = null;
 
+const QR_START_FETCH_TIMEOUT_MS = 15000;
+
+// fetch() with an AbortController timeout so a hung request (captive portal, TCP
+// stall, slow TV network) can't leave the QR screen stuck on "preparing" forever
+// with a blank container. Rejects on timeout so callers surface an error + retry.
+function fetchWithTimeout(url, options = {}, timeoutMs = QR_START_FETCH_TIMEOUT_MS) {
+  if (typeof AbortController !== "function") {
+    return fetch(url, options);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
 function hasQrAuthConfig() {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 }
@@ -253,7 +269,7 @@ async function ensureQrSessionAuthenticated({ forceNewAnonymous = false } = {}) 
   };
 
   const tryAnonymousSignup = async () => {
-    const response = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+    const response = await fetchWithTimeout(`${SUPABASE_URL}/auth/v1/signup`, {
       method: "POST",
       headers: commonHeaders,
       body: JSON.stringify({
@@ -268,7 +284,7 @@ async function ensureQrSessionAuthenticated({ forceNewAnonymous = false } = {}) 
   };
 
   const tryAnonymousToken = async () => {
-    const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=anonymous`, {
+    const response = await fetchWithTimeout(`${SUPABASE_URL}/auth/v1/token?grant_type=anonymous`, {
       method: "POST",
       headers: commonHeaders,
       body: JSON.stringify({})
@@ -328,7 +344,7 @@ async function startRpc(deviceNonce, redirectBaseUrl, includeDeviceName = true) 
   }
 
   const response = await fetchWithCallerSessionRecovery(() =>
-    fetch(`${SUPABASE_URL}/rest/v1/rpc/start_tv_login_session`, {
+    fetchWithTimeout(`${SUPABASE_URL}/rest/v1/rpc/start_tv_login_session`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

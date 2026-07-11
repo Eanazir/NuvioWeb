@@ -8,11 +8,26 @@ function normalizeDisplayText(value) {
     .replace(/\\"/g, '"');
 }
 
+const META_CACHE_MAX_ENTRIES = 300;
+
 class MetaRepository {
   constructor() {
     this.metaCache = new Map();
     this.inFlightMeta = new Map();
     this.inFlightMetaAll = new Map();
+  }
+
+  // Store a meta entry with a bounded cache size. The cache had no TTL and was
+  // never cleared in normal operation, so it grew for the whole session; evict
+  // the oldest entry (Map preserves insertion order) once at capacity.
+  cacheMeta(cacheKey, meta) {
+    if (this.metaCache.size >= META_CACHE_MAX_ENTRIES && !this.metaCache.has(cacheKey)) {
+      const oldestKey = this.metaCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.metaCache.delete(oldestKey);
+      }
+    }
+    this.metaCache.set(cacheKey, meta);
   }
 
   async getMeta(addonBaseUrl, type, id) {
@@ -39,7 +54,7 @@ class MetaRepository {
         return { status: "error", message: "Meta not found", code: 404 };
       }
 
-      this.metaCache.set(cacheKey, meta);
+      this.cacheMeta(cacheKey, meta);
       return { status: "success", data: meta };
     })();
 
@@ -108,7 +123,7 @@ class MetaRepository {
       for (const { addon, type: candidateType } of candidates) {
         const result = await this.getMeta(addon.baseUrl, candidateType, id);
         if (result.status === "success") {
-          this.metaCache.set(cacheKey, result.data);
+          this.cacheMeta(cacheKey, result.data);
           return result;
         }
       }

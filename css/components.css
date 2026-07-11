@@ -6105,38 +6105,33 @@ button:focus-visible {
   visibility: hidden;
 }
 
+/* Modern hero logo: a fixed two-layer crossfade container that mirrors NuvioTV's
+   in-place logo cross-dissolve. Two permanently-stacked, identically-boxed <img>
+   layers cross-fade on swap — no cloned "ghost" nodes, no reflow, no slide, so the
+   old and new logo never appear at different positions. */
 .home-screen-shell.home-layout-modern .home-hero-logo {
+  position: relative;
   width: min(100%, var(--modern-hero-logo-max-width));
   max-width: min(100%, var(--modern-hero-logo-max-width));
   height: var(--modern-hero-logo-max-height);
   max-height: var(--modern-hero-logo-max-height);
+}
+
+.home-screen-shell.home-layout-modern .home-hero-logo-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   object-position: left top;
-}
-
-.home-screen-shell.home-layout-modern .home-hero-logo {
-  transition: opacity 400ms ease;
-}
-
-.home-screen-shell.home-layout-modern .home-hero-logo.home-hero-logo-transition-enter {
   opacity: 0;
-}
-
-.home-screen-shell.home-layout-modern .home-hero-logo.home-hero-logo-transition-enter.is-visible {
-  opacity: 1;
-}
-
-.home-screen-shell.home-layout-modern .home-hero-logo-transition-ghost {
-  position: absolute;
-  left: 0;
-  top: 0;
-  opacity: 1;
   pointer-events: none;
-  transition: opacity 400ms ease;
+  /* NuvioTV logo cross-dissolve is ~100ms (Coil default). */
+  transition: opacity 120ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.home-screen-shell.home-layout-modern .home-hero-logo-transition-ghost.is-fading-out {
-  opacity: 0;
+.home-screen-shell.home-layout-modern .home-hero-logo-layer.is-active {
+  opacity: 1;
 }
 
 .home-screen-shell.home-layout-modern .home-hero-title-text {
@@ -6286,6 +6281,18 @@ button:focus-visible {
   overflow-x: hidden;
   scrollbar-width: none;
   scroll-padding-top: 0;
+}
+
+/* On constrained TVs we set scroll position via a single scrollLeft/scrollTop write
+   (no per-frame JS spring — that reflowed every frame and stuttered). Native
+   `scroll-behavior: smooth` lets the browser's compositor animate that single write,
+   restoring a NuvioTV-like glide without the JS reflow cost. Browsers that don't
+   support it fall back to the instant jump (current behavior). */
+.performance-constrained .home-screen-shell .home-track,
+.performance-constrained.home-screen-shell .home-track,
+.performance-constrained .home-screen-shell.home-layout-modern .home-modern-rows-viewport,
+.performance-constrained.home-screen-shell.home-layout-modern .home-modern-rows-viewport {
+  scroll-behavior: smooth;
 }
 
 .folder-detail-home-shell .home-main {
