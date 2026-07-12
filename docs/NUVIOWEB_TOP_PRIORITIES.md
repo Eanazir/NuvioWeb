@@ -149,6 +149,12 @@ Two distinct defects on the TV detail screen (`metaDetailsScreen.js` + `.series-
 
 **Expected parity:** the season selector, complete episode thumbnail, and Creator and Cast area should remain visible together where the Android layout shows them, on first open and on every subsequent focus. Fixing the initial-render size and passing `preserveVerticalScroll` (or an episode-aware anchor) on the up-to-season transition should restore consistent framing. Moving within the detail screen must not repeatedly re-anchor the page so the focused episode clips.
 
+### Missing feature: Use NuvioTV's IMDb-first episode-rating lookup
+
+NuvioTV requests episode ratings with the title's IMDb ID first, then falls back to SeriesGraph with the TMDB ID when IMDb returns no results (`ImdbEpisodeRatingsRepository.kt:61-75`; `MetaDetailsViewModel.kt:1206-1230`). NuvioWeb only sends the TMDB ID to SeriesGraph (`imdbEpisodeRatingsRepository.js:66-79`; `metaDetailsScreen.js:2500-2511`). Consequently, an episode card can show only its date even when the Android app finds and displays an IMDb episode rating.
+
+**Expected parity:** resolve both IMDb and TMDB IDs, query the IMDb ratings service first, fall back to SeriesGraph, and keep ratings optional when neither source has a value. Preserve the existing 30-minute cache and update the rendered episode cards when background ratings arrive.
+
 ### Bug: Focus outlines use the darker accent color on several screens
 
 The seven Web theme palettes contain the same core values as Android NuvioTV, including separate `Secondary` and `FocusRing` colors — though the palettes live in `js/ui/theme/themeColors.js` and `css/base.css`, not the empty `css/themes.css`. In Crimson, `--secondary-color` is `#e53935` and `--focus-color` is `#ff5252` (`themeColors.js:20`/`27`), matching Android's `red500`/`red300` (`PrimitiveTokens.kt:24`/`26`). Several Web focus outlines use `--secondary-color` instead of `--focus-color`, so in Crimson highlighted thumbnails render with the darker `#E53935` instead of Android's brighter `#FF5252`.
