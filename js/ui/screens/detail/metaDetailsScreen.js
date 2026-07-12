@@ -3609,8 +3609,8 @@ export const MetaDetailsScreen = {
             <div class="series-episode-title">${escapeHtml(normalizeEpisodeTitle(episode.title, episode.episode))}</div>
             <div class="series-episode-overview">${escapeHtml(episode.overview || t("episodes_episode", {}, "Episode"))}</div>
             ${metaParts ? `<div class="series-episode-meta">${metaParts}</div>` : ""}
-            ${progressRatio > 0.02 && progressRatio < 0.98 ? `<div class="series-episode-progress"><span style="width:${Math.round(progressRatio * 100)}%"></span></div>` : ""}
           </div>
+          ${progressRatio > 0.02 && progressRatio < 0.98 ? `<div class="series-episode-progress"><span style="width:${Math.round(progressRatio * 100)}%"></span></div>` : ""}
         </div>
       </article>
     `;
@@ -3866,12 +3866,12 @@ export const MetaDetailsScreen = {
       statusNode.remove();
     }
 
-    let progressNode = copy.querySelector(".series-episode-progress");
+    let progressNode = thumb.querySelector(".series-episode-progress");
     if (progressRatio > 0.02 && progressRatio < 0.98) {
       if (!(progressNode instanceof HTMLElement)) {
         progressNode = document.createElement("div");
         progressNode.className = "series-episode-progress";
-        copy.appendChild(progressNode);
+        thumb.appendChild(progressNode);
       }
       progressNode.innerHTML = `<span style="width:${Math.round(progressRatio * 100)}%"></span>`;
     } else if (progressNode instanceof HTMLElement) {
